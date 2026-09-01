@@ -32,7 +32,17 @@
 
 MCP_CAN CAN(CAN_CS_PIN);
 
-static const char s_test_message[TEST_MESSAGE_LEN] = { '0', '1', '2', '3', '4', '5', '6', '7' };
+static char s_test_message[TEST_MESSAGE_LEN];
+static uint8_t s_send_counter = 0;
+
+/* Shifts the digit window each call, e.g. "01234567", "12345678", ... */
+static void build_test_message()
+{
+    for (uint8_t i = 0; i < TEST_MESSAGE_LEN; i++) {
+        s_test_message[i] = '0' + ((s_send_counter + i) % 10);
+    }
+    s_send_counter = (s_send_counter + 1) % 10;
+}
 
 void setup()
 {
@@ -64,6 +74,7 @@ static void send_test_message()
     delay(150);
     digitalWrite(LED_BUILTIN, LOW);
 
+    build_test_message();
     byte result = CAN.sendMsgBuf(TEST_CAN_ID, 0, TEST_MESSAGE_LEN, (uint8_t *)s_test_message);
     Serial.print("TX id=0x100 data='");
     Serial.write((const uint8_t *)s_test_message, TEST_MESSAGE_LEN);
