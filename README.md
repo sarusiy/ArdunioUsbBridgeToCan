@@ -10,22 +10,41 @@ same physical CAN bus (CAN-H/CAN-L wired together, 120 ohm termination
 jumper closed on both ends) and is used to simulate/test CAN traffic without
 a real vehicle bus.
 
-## Status: Phase 1 - HW connectivity test (validated)
+## Status: Phase 2 - Simulated OBD-II ECU (default), Phase 1 echo test preserved
 
-`src/main.cpp` currently just proves the bus works end-to-end:
-- Every second, sends a CAN frame (ID `0x100`) with a single data byte
-  cycling through ASCII `'0'`-`'9'`, logged over USB serial.
-- Listens for CAN frames and logs them; when the JC-ESP32P4-M3 board echoes
-  the frame back, this reports whether the echoed byte matches what was
-  last sent.
+`src/main.cpp` is now dual-mode via a compile-time build flag
+(`ECHO_TEST_MODE`), selected per PlatformIO environment in `platformio.ini`:
 
-Confirmed on hardware: every send reports `TX ... -> OK` and every echo
-reports `RX ... (echo matches last TX)`, with zero errors across many
-frames while the JC-ESP32P4-M3 board simultaneously keeps Wi-Fi and BLE
-running.
+- **`env:uno` (default)** — `ECHO_TEST_MODE=0`. Simulates a real vehicle ECU
+  speaking standard SAE J1979 OBD-II over CAN:
+  - Listens for OBD-II requests on `0x7DF` (functional/broadcast) and
+    `0x7E0` (physical addressing for ECU1).
+  - Responds on `0x7E8` using ISO 15765-4 single-frame format
+    (`[len, mode+0x40, PID, data...]`) for mode `0x01` ("show current data"),
+    supporting PIDs `0x00` (supported PIDs bitmask), `0x05` (coolant temp),
+    `0x0C` (RPM), `0x0D` (vehicle speed), `0x11` (throttle position).
+  - Internally simulates a plausible drive cycle (20s sine-wave RPM/speed/
+    throttle oscillation) and a 60s coolant warm-up ramp, printing the
+    simulated state over serial every 2 seconds.
+- **`env:uno_echo_test`** — `ECHO_TEST_MODE=1`. Preserves the original
+  Phase 1 hardware-validation test: every second, sends a CAN frame
+  (ID `0x100`) with a single data byte cycling through ASCII `'0'`-`'9'`,
+  and logs whether the JC-ESP32P4-M3 board's echo matches what was last
+  sent.
+
+Confirmed on hardware for both modes: the echo test reports `TX ... -> OK`
+and `RX ... (echo matches last TX)` with zero errors across many frames,
+and the ECU simulator boots, initializes the MCP2515 at 500kbps, and prints
+evolving simulated state (rpm/speed/throttle/coolant) with no crashes.
+
+Build/upload a specific environment with `-e uno` or `-e uno_echo_test`
+(see Build section below).
 
 The matching ESP32-P4 side lives in `src/main.c` of the JC-ESP32P4-M3 repo,
-which listens on its MCP2515 and echoes back any frame it receives.
+which listens on its MCP2515 and echoes back any frame it receives (useful
+for the echo test; it does not currently act as an OBD-II scan tool, so a
+separate requester is needed to exercise the ECU simulator's request/
+response path).
 
 ## Wiring
 
@@ -45,13 +64,19 @@ wiring diagram.
 ## Build
 
 ```
-platformio run
-platformio run -t upload
-platformio device monitor -b 115200
+platformio run -e uno              # simulated OBD-II ECU (default)
+platformio run -e uno_echo_test     # original echo test
+platformio run -e uno -t upload --upload-port COM4
+platformio device monitor -p COM4 -b 115200
 ```
 
-## Next steps (Phase 2)
+## Next steps (Phase 3)
 
-Replace the test payload with an actual USB<->CAN bridge protocol (e.g.
-SLCAN-style ASCII framing over serial) so a PC can inject/observe real CAN
-frames via tools like `python-can`.
+Add a "scan tool" mode (e.g. as an alternate JC-ESP32P4-M3 build variant, or
+a separate test node) that actively sends OBD-II requests on `0x7DF`/`0x7E0`
+so the simulated ECU's request/response path can be validated over the real
+CAN bus, not just observed via its standalone serial status prints.
+
+Longer term: replace the Phase 1 test payload with an actual USB<->CAN
+bridge protocol (e.g. SLCAN-style ASCII framing over serial) so a PC can
+inject/observe real CAN frames via tools like `python-can`.
