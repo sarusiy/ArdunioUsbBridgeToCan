@@ -2,11 +2,12 @@
  * Arduino Uno + MCP2515/TJA1050 CAN module.
  *
  * Phase 1 (current): HW connectivity test only.
- *   - Sends a CAN frame every second on TEST_CAN_ID, data byte cycling
- *     through the ASCII digits '0'-'9', and logs it over USB serial.
+ *   - Every second, sends a fixed 8-char test message (TEST_MESSAGE) as a
+ *     single CAN frame (8 bytes is the max per frame) on TEST_CAN_ID, and
+ *     logs it over USB serial.
  *   - Logs any CAN frame received (expected: the JC-ESP32P4-M3 board
  *     echoing the same frame back on the bus) and reports whether the
- *     echoed byte matches the last one sent.
+ *     echoed message matches what was last sent.
  *
  * Wiring (see Doc/electrical drawing.vsdx in JC-ESP32P4-M3):
  *   MCP2515 SCK  -> Uno D13
@@ -22,14 +23,16 @@
  */
 #include <SPI.h>
 #include <mcp_can.h>
+#include <string.h>
 
 #define CAN_CS_PIN 10
 #define TEST_CAN_ID 0x100
 #define SEND_INTERVAL_MS 1000
+#define TEST_MESSAGE_LEN 8
 
 MCP_CAN CAN(CAN_CS_PIN);
 
-static uint8_t s_last_sent = '0';
+static const char s_test_message[TEST_MESSAGE_LEN] = { '0', '1', '2', '3', '4', '5', '6', '7' };
 
 void setup()
 {
@@ -52,7 +55,7 @@ void setup()
     Serial.println("MCP2515 ready, normal mode, 500 kbps.");
 }
 
-static void send_test_frame()
+static void send_test_message()
 {
     /* Pin 13/LED_BUILTIN doubles as SPI SCK, whose idle-low state instantly
      * overrides digitalWrite() once CAN polling resumes; hold it with a
@@ -61,14 +64,11 @@ static void send_test_frame()
     delay(150);
     digitalWrite(LED_BUILTIN, LOW);
 
-    uint8_t data[1] = { s_last_sent };
-    byte result = CAN.sendMsgBuf(TEST_CAN_ID, 0, 1, data);
+    byte result = CAN.sendMsgBuf(TEST_CAN_ID, 0, TEST_MESSAGE_LEN, (uint8_t *)s_test_message);
     Serial.print("TX id=0x100 data='");
-    Serial.print((char)s_last_sent);
+    Serial.write((const uint8_t *)s_test_message, TEST_MESSAGE_LEN);
     Serial.print("' -> ");
     Serial.println(result == CAN_OK ? "OK" : "ERR");
-
-    s_last_sent = (s_last_sent == '9') ? '0' : s_last_sent + 1;
 }
 
 static void poll_can_rx()
@@ -94,12 +94,9 @@ static void poll_can_rx()
     }
     Serial.print("' ");
 
-    if (rxId == TEST_CAN_ID && len >= 1) {
-        uint8_t expected = (s_last_sent == '0') ? '9' : s_last_sent - 1;
-        Serial.println(buf[0] == expected ? "(echo matches last TX)" : "(echo MISMATCH)");
-    } else {
-        Serial.println();
-    }
+    bool match = (rxId == TEST_CAN_ID) && (len == TEST_MESSAGE_LEN) &&
+                 (memcmp(buf, s_test_message, TEST_MESSAGE_LEN) == 0);
+    Serial.println(match ? "(echo matches last TX)" : "(echo MISMATCH)");
 }
 
 void loop()
@@ -109,7 +106,7 @@ void loop()
 
     if (now - last_send >= SEND_INTERVAL_MS) {
         last_send = now;
-        send_test_frame();
+        send_test_message();
     }
 
     poll_can_rx();

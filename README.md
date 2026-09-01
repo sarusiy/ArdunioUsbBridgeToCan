@@ -10,7 +10,7 @@ same physical CAN bus (CAN-H/CAN-L wired together, 120 ohm termination
 jumper closed on both ends) and is used to simulate/test CAN traffic without
 a real vehicle bus.
 
-## Status: Phase 1 - HW connectivity test
+## Status: Phase 1 - HW connectivity test (validated)
 
 `src/main.cpp` currently just proves the bus works end-to-end:
 - Every second, sends a CAN frame (ID `0x100`) with a single data byte
@@ -18,6 +18,11 @@ a real vehicle bus.
 - Listens for CAN frames and logs them; when the JC-ESP32P4-M3 board echoes
   the frame back, this reports whether the echoed byte matches what was
   last sent.
+
+Confirmed on hardware: every send reports `TX ... -> OK` and every echo
+reports `RX ... (echo matches last TX)`, with zero errors across many
+frames while the JC-ESP32P4-M3 board simultaneously keeps Wi-Fi and BLE
+running.
 
 The matching ESP32-P4 side lives in `src/main.c` of the JC-ESP32P4-M3 repo,
 which listens on its MCP2515 and echoes back any frame it receives.
