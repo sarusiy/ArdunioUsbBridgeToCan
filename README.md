@@ -26,25 +26,28 @@ a real vehicle bus.
   - Internally simulates a plausible drive cycle (20s sine-wave RPM/speed/
     throttle oscillation) and a 60s coolant warm-up ramp, printing the
     simulated state over serial every 2 seconds.
+  - Broadcasts generic simulated engine (`0x120`, 50 Hz), vehicle (`0x180`,
+    20 Hz), and body (`0x220`, 2 Hz) frames to exercise passive CAN capture.
+    These IDs and payload layouts are test definitions, not manufacturer data.
 - **`env:uno_echo_test`** — `ECHO_TEST_MODE=1`. Preserves the original
   Phase 1 hardware-validation test: every second, sends a CAN frame
   (ID `0x100`) with a single data byte cycling through ASCII `'0'`-`'9'`,
   and logs whether the JC-ESP32P4-M3 board's echo matches what was last
   sent.
 
-Confirmed on hardware for both modes: the echo test reports `TX ... -> OK`
+Previously confirmed on hardware: the echo test reports `TX ... -> OK`
 and `RX ... (echo matches last TX)` with zero errors across many frames,
-and the ECU simulator boots, initializes the MCP2515 at 500kbps, and prints
-evolving simulated state (rpm/speed/throttle/coolant) with no crashes.
+and the base ECU simulator boots and prints evolving state. The newly added
+periodic broadcast traffic and full P4 request/response integration still need
+hardware validation.
 
 Build/upload a specific environment with `-e uno` or `-e uno_echo_test`
 (see Build section below).
 
-The matching ESP32-P4 side lives in `src/main.c` of the JC-ESP32P4-M3 repo,
-which listens on its MCP2515 and echoes back any frame it receives (useful
-for the echo test; it does not currently act as an OBD-II scan tool, so a
-separate requester is needed to exercise the ECU simulator's request/
-response path).
+The matching ESP32-P4 side lives in `src/main.c` of the JC-ESP32P4-M3 repo.
+It actively queries the simulated ECU on `0x7DF`, consumes responses on
+`0x7E8`, and captures periodic broadcasts. Only the dedicated Phase 1 test
+ID `0x100` is echoed; arbitrary vehicle traffic is not echoed.
 
 ## Wiring
 
@@ -70,13 +73,9 @@ platformio run -e uno -t upload --upload-port COM4
 platformio device monitor -p COM4 -b 115200
 ```
 
-## Next steps (Phase 3)
+## Next steps
 
-Add a "scan tool" mode (e.g. as an alternate JC-ESP32P4-M3 build variant, or
-a separate test node) that actively sends OBD-II requests on `0x7DF`/`0x7E0`
-so the simulated ECU's request/response path can be validated over the real
-CAN bus, not just observed via its standalone serial status prints.
-
-Longer term: replace the Phase 1 test payload with an actual USB<->CAN
-bridge protocol (e.g. SLCAN-style ASCII framing over serial) so a PC can
-inject/observe real CAN frames via tools like `python-can`.
+- Build and validate periodic broadcasts together with P4 OBD requests.
+- Add simulated Mode 02 freeze-frame and Mode 03 DTC responses.
+- Add ISO-TP multi-frame behavior for responses larger than one CAN frame.
+- Add configurable fault, ignition, door, and driving scenarios.

@@ -141,8 +141,8 @@ void loop()
  * a real driving cycle instead of staying static.
  *
  * Testable with any real OBD-II scan tool/adapter wired to the same bus.
- * The JC-ESP32P4-M3 side currently just echoes frames (it isn't a scan
- * tool), so it won't query this on its own.
+ * The JC-ESP32P4-M3 firmware queries these PIDs while independently
+ * capturing the generic periodic broadcasts below.
  */
 #define OBD_REQUEST_ID_FUNCTIONAL 0x7DF
 #define OBD_REQUEST_ID_PHYSICAL   0x7E0
@@ -158,6 +158,15 @@ void loop()
 #define STATUS_PRINT_INTERVAL_MS 2000
 #define DRIVE_CYCLE_PERIOD_MS 20000UL
 #define WARMUP_DURATION_MS 60000UL
+
+/* Generic simulated broadcast IDs. These are test IDs, not definitions for
+ * any real vehicle manufacturer. */
+#define CAN_ID_ENGINE_STATE  0x120
+#define CAN_ID_VEHICLE_STATE 0x180
+#define CAN_ID_BODY_STATE    0x220
+#define ENGINE_PERIOD_MS     20
+#define VEHICLE_PERIOD_MS    50
+#define BODY_PERIOD_MS       500
 
 static unsigned long s_boot_time;
 
@@ -195,9 +204,52 @@ static EcuState simulate_ecu_state(unsigned long now)
 static void send_obd_response(uint8_t len, const uint8_t *payload)
 {
     uint8_t data[8] = {0};
+    if (len > 7) {
+        len = 7;
+    }
     data[0] = len;
     memcpy(&data[1], payload, len);
     CAN.sendMsgBuf(OBD_RESPONSE_ID, 0, 8, data);
+}
+
+static void send_periodic_broadcasts(unsigned long now, const EcuState &state)
+{
+    static unsigned long last_engine;
+    static unsigned long last_vehicle;
+    static unsigned long last_body;
+
+    if (now - last_engine >= ENGINE_PERIOD_MS) {
+        last_engine = now;
+        uint16_t rpm_raw = state.rpm * 4;
+        uint8_t data[8] = {
+            (uint8_t)(rpm_raw >> 8), (uint8_t)rpm_raw,
+            (uint8_t)(state.coolant_c + 40),
+            (uint8_t)((uint16_t)state.throttle_pct * 255 / 100),
+            0, 0, 0, 0
+        };
+        CAN.sendMsgBuf(CAN_ID_ENGINE_STATE, 0, sizeof(data), data);
+    }
+
+    if (now - last_vehicle >= VEHICLE_PERIOD_MS) {
+        last_vehicle = now;
+        uint16_t speed_centi_kmh = (uint16_t)state.speed_kmh * 100;
+        uint8_t data[8] = {
+            (uint8_t)(speed_centi_kmh >> 8), (uint8_t)speed_centi_kmh,
+            state.speed_kmh > 0 ? 1u : 0u,
+            0, 0, 0, 0, 0
+        };
+        CAN.sendMsgBuf(CAN_ID_VEHICLE_STATE, 0, sizeof(data), data);
+    }
+
+    if (now - last_body >= BODY_PERIOD_MS) {
+        last_body = now;
+        uint8_t data[8] = {
+            state.speed_kmh == 0 ? 1u : 0u, /* simulated driver door */
+            state.speed_kmh > 0 ? 1u : 0u,  /* simulated ignition */
+            0, 0, 0, 0, 0, 0
+        };
+        CAN.sendMsgBuf(CAN_ID_BODY_STATE, 0, sizeof(data), data);
+    }
 }
 
 static void handle_obd_request(uint8_t mode, uint8_t pid, const EcuState &state)
@@ -209,7 +261,7 @@ static void handle_obd_request(uint8_t mode, uint8_t pid, const EcuState &state)
     switch (pid) {
         case PID_SUPPORTED_01_20: {
             /* Bitmask for PIDs 0x01-0x20: we support 0x05, 0x0C, 0x0D, 0x11. */
-            uint8_t payload[5] = { 0x41, PID_SUPPORTED_01_20, 0x08, 0x18, 0x80 };
+            uint8_t payload[6] = { 0x41, PID_SUPPORTED_01_20, 0x08, 0x18, 0x80, 0x00 };
             send_obd_response(6, payload);
             Serial.println("OBD RX mode=01 pid=00 -> TX supported-PIDs bitmask");
             break;
@@ -297,6 +349,7 @@ void loop()
     EcuState state = simulate_ecu_state(now);
 
     poll_can_rx(state);
+    send_periodic_broadcasts(now, state);
 
     static unsigned long last_print = 0;
     if (now - last_print >= STATUS_PRINT_INTERVAL_MS) {
